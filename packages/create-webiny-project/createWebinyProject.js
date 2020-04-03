@@ -95,30 +95,14 @@ if (typeof projectName === "undefined") {
     process.exit(1);
 }
 
-createApp(projectName, program.verbose, program.scriptsVersion, program.template);
+createApp(projectName, program.template);
 
-function createApp(name, verbose, version, template) {
-    const unsupportedNodeVersion = !semver.satisfies(process.version, ">=8.10.0");
-
-    // if (unsupportedNodeVersion) {
-    //   console.log(
-    //     chalk.yellow(
-    //       `You are using Node ${process.version} so the project will be bootstrapped with an old unsupported version of tools.\n\n` +
-    //         `Please update to Node 8.10 or higher for a better, fully supported experience.\n`
-    //     )
-    //   );
-    //   // Fall back to latest supported react-scripts on Node 4
-    //   version = 'react-scripts@0.9.x';
-    // }
-
+function createApp(name, template) {
     const root = path.resolve(name);
     const appName = path.basename(root);
 
     checkAppName(appName);
     fs.ensureDirSync(name);
-    // if (!isSafeToCreateProjectIn(root, name)) {
-    //   process.exit(1);
-    // }
     console.log();
 
     console.log(`Creating a new Weniny project in ${chalk.green(root)}.`);
@@ -130,22 +114,12 @@ function createApp(name, verbose, version, template) {
         private: true
     };
 
-    // const webinyConfig = module.exports = {
-    //   projectName: appName
-    // };
-
     fs.writeFileSync(
         path.join(root, "package.json"),
         JSON.stringify(packageJson, null, 2) + os.EOL
     );
 
-    // fs.writeFileSync(
-    //   path.join(root, 'webiny.config.js'),
-    //   JSON.parse(webinyConfig, null, 2) + os.EOL
-    // );
-
     const useYarn = shouldUseYarn();
-    const originalDirectory = process.cwd();
     process.chdir(root);
     if (!useYarn) {
         process.exit(1);
@@ -166,7 +140,7 @@ function createApp(name, verbose, version, template) {
         }
     }
 
-    run(root, appName, version, verbose, originalDirectory, template, useYarn);
+    run(root, appName, template, useYarn);
 }
 
 function shouldUseYarn() {
@@ -178,7 +152,7 @@ function shouldUseYarn() {
     }
 }
 
-function install(root, useYarn, dependencies, verbose, isOnline) {
+function install(root, useYarn, dependencies, isOnline) {
     return new Promise((resolve, reject) => {
         let command;
         let args;
@@ -199,10 +173,6 @@ function install(root, useYarn, dependencies, verbose, isOnline) {
             }
         }
 
-        if (verbose) {
-            args.push("--verbose");
-        }
-
         const child = spawn(command, args, { stdio: "inherit" });
         child.on("close", code => {
             if (code !== 0) {
@@ -216,10 +186,10 @@ function install(root, useYarn, dependencies, verbose, isOnline) {
     });
 }
 
-function run(root, appName, version, verbose, originalDirectory, template, useYarn) {
+function run(root, appName, template, useYarn) { 
     Promise.all([
-        getInstallPackage(version, originalDirectory),
-        getTemplateInstallPackage(template, originalDirectory)
+        getInstallPackage(),
+        getTemplateInstallPackage(template)
     ]).then(([packageToInstall, templateToInstall]) => {
         const allDependencies = ["react", "react-dom", packageToInstall];
 
@@ -234,53 +204,26 @@ function run(root, appName, version, verbose, originalDirectory, template, useYa
                 }))
             )
             .then(({ isOnline, packageInfo, templateInfo }) => {
-                let packageVersion = semver.coerce(packageInfo.version);
-
-                const templatesVersionMinimum = "3.3.0";
-
-                // Assume compatibility if we can't test the version.
-                if (!semver.valid(packageVersion)) {
-                    packageVersion = templatesVersionMinimum;
-                }
-
-                // Only support templates when used alongside new react-scripts versions.
-                const supportsTemplates = semver.gte(packageVersion, templatesVersionMinimum);
-                if (supportsTemplates) {
-                    allDependencies.push(templateToInstall);
-                } else if (template) {
-                    console.log("");
-                    console.log(
-                        `The ${chalk.cyan(packageInfo.name)} version you're using ${
-                            packageInfo.name === "react-scripts" ? "is not" : "may not be"
-                        } compatible with the ${chalk.cyan("--template")} option.`
-                    );
-                    console.log("");
-                }
+                allDependencies.push(templateToInstall);
 
                 console.log(
                     `Installing ${chalk.cyan("react")}, ${chalk.cyan(
                         "react-dom"
-                    )}, and ${chalk.cyan(packageInfo.name)}${
-                        supportsTemplates ? ` with ${chalk.cyan(templateInfo.name)}` : ""
+                    )}, and ${chalk.cyan(packageInfo.name)}${ ` with ${chalk.cyan(templateInfo.name)}` 
                     } ...`
                 );
                 console.log();
 
-                return install(root, useYarn, allDependencies, verbose, isOnline).then(() => ({
+                return install(root, useYarn, allDependencies, isOnline).then(() => ({
                     packageInfo,
-                    supportsTemplates,
                     templateInfo
                 }));
             })
-            .then(async ({ packageInfo, supportsTemplates, templateInfo }) => {
-                const packageName = packageInfo.name;
-                const templateName = supportsTemplates ? templateInfo.name : undefined;
-                checkNodeVersion(packageName);
-                setCaretRangeForRuntimeDeps(packageName);
+            .then(async ({ packageInfo, templateInfo }) => {
+                const templateName = templateInfo.name;
 
                 // --- executes installer
                 require(`${templateName}`)({ name: appName });
-
             })
             .catch(reason => {
                 console.log();
@@ -322,68 +265,25 @@ function run(root, appName, version, verbose, originalDirectory, template, useYa
     });
 }
 
-function getInstallPackage(version, originalDirectory) {
+function getInstallPackage() {
     let packageToInstall = "@webiny/cli";
-    const validSemver = semver.valid(version);
-    if (validSemver) {
-        packageToInstall += `@${validSemver}`;
-    } else if (version) {
-        if (version[0] === "@" && !version.includes("/")) {
-            packageToInstall += version;
-        } else if (version.match(/^file:/)) {
-            packageToInstall = `file:${path.resolve(
-                originalDirectory,
-                version.match(/^file:(.*)?$/)[1]
-            )}`;
-        } else {
-            // for tar.gz or alternative paths
-            packageToInstall = version;
-        }
-    }
-
     return Promise.resolve(packageToInstall);
 }
 
-function getTemplateInstallPackage(template, originalDirectory) {
+function getTemplateInstallPackage(template) {
     let templateToInstall = "cwp-template";
     if (template) {
-        if (template.match(/^file:/)) {
-            templateToInstall = `file:${path.resolve(
-                originalDirectory,
-                template.match(/^file:(.*)?$/)[1]
-            )}`;
-        } else if (template.includes("://") || template.match(/^.+\.(tgz|tar\.gz)$/)) {
-            // for tar.gz or alternative paths
-            templateToInstall = template;
-        } else {
-            // Add prefix 'cwp-template-' to non-prefixed templates, leaving any
-            // @scope/ intact.
-            const packageMatch = template.match(/^(@[^/]+\/)?(.+)$/);
-            const scope = packageMatch[1] || "";
-            const templateName = packageMatch[2];
+        // Add prefix 'cwp-template-' to non-prefixed templates, leaving any
+        // @scope/ intact.
+        const packageMatch = template.match(/^(@[^/]+\/)?(.+)$/);
+        const scope = packageMatch[1] || "";
+        const templateName = packageMatch[2];
 
-            if (
-                templateName === templateToInstall ||
-                templateName.startsWith(`${templateToInstall}-`)
-            ) {
-                // Covers:
-                // - cwp-template
-                // - @SCOPE/cwp-template
-                // - cwp-template-NAME
-                // - @SCOPE/cwp-template-NAME
-                templateToInstall = `${scope}${templateName}`;
-            } else if (templateName.startsWith("@")) {
-                // Covers using @SCOPE only
-                templateToInstall = `${templateName}/${templateToInstall}`;
-            } else {
-                // Covers templates without the `cwp-template` prefix:
-                // - NAME
-                // - @SCOPE/NAME
-                templateToInstall = `${scope}${templateToInstall}-${templateName}`;
-            }
-        }
+        // Covers templates without the `cwp-template` prefix:
+        // - NAME
+        // - @SCOPE/NAME
+        templateToInstall = `${scope}${templateToInstall}-${templateName}`;
     }
-
     return Promise.resolve(templateToInstall);
 }
 
@@ -398,39 +298,8 @@ function getPackageInfo(installPackage) {
             name: installPackage.charAt(0) + installPackage.substr(1).split("@")[0],
             version: installPackage.split("@")[1]
         });
-    } 
+    }
     return Promise.resolve({ name: installPackage });
-}
-
-function checkNodeVersion(packageName) {
-    const packageJsonPath = path.resolve(
-        process.cwd(),
-        "node_modules",
-        packageName,
-        "package.json"
-    );
-
-    if (!fs.existsSync(packageJsonPath)) {
-        return;
-    }
-
-    const packageJson = require(packageJsonPath);
-    if (!packageJson.engines || !packageJson.engines.node) {
-        return;
-    }
-
-    if (!semver.satisfies(process.version, packageJson.engines.node)) {
-        console.error(
-            chalk.red(
-                "You are running Node %s.\n" +
-                    "Create Webiny Project requires Node %s or higher. \n" +
-                    "Please update your version of Node."
-            ),
-            process.version,
-            packageJson.engines.node
-        );
-        process.exit(1);
-    }
 }
 
 function checkAppName(appName) {
@@ -452,8 +321,7 @@ function checkAppName(appName) {
         process.exit(1);
     }
 
-    // TODO: there should be a single place that holds the dependencies
-    const dependencies = ["react", "react-dom", "react-scripts", "webiny"].sort();
+    const dependencies = ["react", "react-dom", "webiny"].sort();
     if (dependencies.includes(appName)) {
         console.error(
             chalk.red(
@@ -469,69 +337,25 @@ function checkAppName(appName) {
     }
 }
 
-function makeCaretRange(dependencies, name) {
-    const version = dependencies[name];
-
-    if (typeof version === "undefined") {
-        console.error(chalk.red(`Missing ${name} dependency in package.json`));
-        process.exit(1);
-    }
-
-    let patchedVersion = `^${version}`;
-
-    if (!semver.validRange(patchedVersion)) {
-        console.error(
-            `Unable to patch ${name} dependency version because version ${chalk.red(
-                version
-            )} will become invalid ${chalk.red(patchedVersion)}`
-        );
-        patchedVersion = version;
-    }
-
-    dependencies[name] = patchedVersion;
-}
-
-function setCaretRangeForRuntimeDeps(packageName) {
-    const packagePath = path.join(process.cwd(), "package.json");
-    const packageJson = require(packagePath);
-
-    if (typeof packageJson.dependencies === "undefined") {
-        console.error(chalk.red("Missing dependencies in package.json"));
-        process.exit(1);
-    }
-
-    const packageVersion = packageJson.dependencies[packageName];
-    if (typeof packageVersion === "undefined") {
-        console.error(chalk.red(`Unable to find ${packageName} in package.json`));
-        process.exit(1);
-    }
-
-    makeCaretRange(packageJson.dependencies, "react");
-    makeCaretRange(packageJson.dependencies, "react-dom");
-
-    fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2) + os.EOL);
-}
-
 function getProxy() {
-  if (process.env.https_proxy) {
-    return process.env.https_proxy;
-  } else {
-    try {
-      // Trying to read https-proxy from .npmrc
-      let httpsProxy = execSync('npm config get https-proxy')
-        .toString()
-        .trim();
-      return httpsProxy !== 'null' ? httpsProxy : undefined;
-    } catch (e) {
-      return;
+    if (process.env.https_proxy) {
+        return process.env.https_proxy;
+    } else {
+        try {
+            // Trying to read https-proxy from .npmrc
+            let httpsProxy = execSync("npm config get https-proxy")
+                .toString()
+                .trim();
+            return httpsProxy !== "null" ? httpsProxy : undefined;
+        } catch (e) {
+            return;
+        }
     }
-  }
 }
 
 function checkIfOnline(useYarn) {
     if (!useYarn) {
         // Don't ping the Yarn registry.
-        // We'll just assume the best case.
         return Promise.resolve(true);
     }
 
